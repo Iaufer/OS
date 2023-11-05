@@ -38,7 +38,7 @@ void* produce(void* arg) {
         pthread_cond_signal(&monitor.cond);
         pthread_mutex_unlock(&monitor.lock);
 
-        usleep(100000); // 100 ms delay
+        usleep(100000);
     }
 }
 
@@ -56,7 +56,7 @@ void* consume(void* arg) {
         pthread_cond_signal(&monitor.cond);
         pthread_mutex_unlock(&monitor.lock);
 
-        usleep(100000); // 100 ms delay
+        usleep(100000);
     }
 }
 
