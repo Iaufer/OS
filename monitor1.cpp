@@ -9,83 +9,83 @@
 #define SUCCESS 0
 
 typedef struct {
-    pthread_cond_t cond;
-    pthread_mutex_t lock;
-    bool ready;
-    int value;
-} Monitor;
+    pthread_cond_t condition;
+    pthread_mutex_t mutex;
+    bool is_ready;
+    int data;
+} MyMonitor;
 
-Monitor monitor = {
-    .cond = PTHREAD_COND_INITIALIZER,
-    .lock = PTHREAD_MUTEX_INITIALIZER,
-    .ready = false,
-    .value = 0
+MyMonitor my_monitor = {
+    .condition = PTHREAD_COND_INITIALIZER,
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .is_ready = false,
+    .data = 0
 };
 
-void* produce(void* arg) {
+void* producer_function(void* arg) {
     for (;;) {
         int value = rand();
-        pthread_mutex_lock(&monitor.lock);
+        pthread_mutex_lock(&my_monitor.mutex);
 
-        while (monitor.ready) {
-            pthread_cond_wait(&monitor.cond, &monitor.lock);
+        while (my_monitor.is_ready) {
+            pthread_cond_wait(&my_monitor.condition, &my_monitor.mutex);
         }
 
-        monitor.value = value;
-        monitor.ready = true;
-        printf("produce value: %d\n", monitor.value);
+        my_monitor.data = value;
+        my_monitor.is_ready = true;
+        printf("Producer produces data: %d\n", my_monitor.data);
 
-        pthread_cond_signal(&monitor.cond);
-        pthread_mutex_unlock(&monitor.lock);
+        pthread_cond_signal(&my_monitor.condition);
+        pthread_mutex_unlock(&my_monitor.mutex);
 
         usleep(100000); // 100 ms delay
     }
 }
 
-void* consume(void* arg) {
+void* consumer_function(void* arg) {
     for (;;) {
-        pthread_mutex_lock(&monitor.lock);
+        pthread_mutex_lock(&my_monitor.mutex);
 
-        while (!monitor.ready) {
-            pthread_cond_wait(&monitor.cond, &monitor.lock);
+        while (!my_monitor.is_ready) {
+            pthread_cond_wait(&my_monitor.condition, &my_monitor.mutex);
         }
 
-        monitor.ready = false;
-        printf("consume value: %d\n", monitor.value);
+        my_monitor.is_ready = false;
+        printf("Consumer consumes data: %d\n", my_monitor.data);
 
-        pthread_cond_signal(&monitor.cond);
-        pthread_mutex_unlock(&monitor.lock);
+        pthread_cond_signal(&my_monitor.condition);
+        pthread_mutex_unlock(&my_monitor.mutex);
 
         usleep(100000); // 100 ms delay
     }
 }
 
 int main() {
-    pthread_t provider;
-    pthread_t consumer;
+    pthread_t producer_thread;
+    pthread_t consumer_thread;
     int status = 0;
 
-    status = pthread_create(&provider, NULL, produce, NULL);
+    status = pthread_create(&producer_thread, NULL, producer_function, NULL);
     if (status != 0) {
-        fprintf(stderr, "Error creating thread\n");
+        fprintf(stderr, "Error creating producer thread\n");
         exit(ERROR_CREATE_THREAD);
     }
 
-    status = pthread_create(&consumer, NULL, consume, NULL);
+    status = pthread_create(&consumer_thread, NULL, consumer_function, NULL);
     if (status != 0) {
-        fprintf(stderr, "Error creating thread\n");
+        fprintf(stderr, "Error creating consumer thread\n");
         exit(ERROR_CREATE_THREAD);
     }
 
-    pthread_join(provider, NULL);
+    pthread_join(producer_thread, NULL);
     if (status != SUCCESS) {
-        fprintf(stderr, "Error joining thread\n");
+        fprintf(stderr, "Error joining producer thread\n");
         exit(ERROR_JOIN_THREAD);
     }
 
-    pthread_join(consumer, NULL);
+    pthread_join(consumer_thread, NULL);
     if (status != SUCCESS) {
-        fprintf(stderr, "Error joining thread\n");
+        fprintf(stderr, "Error joining consumer thread\n");
         exit(ERROR_JOIN_THREAD);
     }
 
