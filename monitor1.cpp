@@ -53,7 +53,6 @@ void* consumer_function(void* arg) {
         my_monitor.is_ready = false;
         printf("Consumer consumes data: %d\n", my_monitor.data);
 
-        pthread_cond_signal(&my_monitor.condition);
         pthread_mutex_unlock(&my_monitor.mutex);
 
         usleep(100000); // 100 ms delay
