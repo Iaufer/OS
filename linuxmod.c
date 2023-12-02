@@ -1,9 +1,9 @@
 #include<linux/kernel.h>
-#include <linux/module.h>
-#include <linux/printk.h> 
+#include<linux/module.h>
+#include<linux/printk.h> 
 #include<linux/proc_fs.h>
 #include<linux/uaccess.h>
-#include <linux/version.h>
+#include<linux/version.h>
 
 #define procfs_name "tsulab"
 static struct proc_dir_entry *our_proc_file = NULL;
