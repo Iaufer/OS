@@ -27,8 +27,9 @@ void* producer_function(void* arg) {
         int value = rand();
         pthread_mutex_lock(&my_monitor.mutex);
 
-        while (my_monitor.is_ready) {
-            pthread_cond_wait(&my_monitor.condition, &my_monitor.mutex);
+        if(my_monitor.is_ready){
+            pthread_mutex_unlock(&my_monitor.mutex);
+            continue;
         }
 
         my_monitor.data = value;
