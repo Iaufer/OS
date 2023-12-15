@@ -14,7 +14,7 @@ static void fib(int major, int minor, char *buffer, size_t buffer_length) {
     int next;
     size_t total_length = 0;
 
-    total_length += snprintf(buffer + total_length, buffer_length - total_length, "%d %d ", major, minor);
+    total_length += snprintf(buffer + total_length, buffer_length - total_length, "%d %d ", minor, major);
 
     for (int i = 2; i < FIB_COUNT; i++) {
         next = minor + major;
