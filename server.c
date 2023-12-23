@@ -63,7 +63,6 @@ int main() {
 
         res = pselect(MAX_FD + 1, &work_fds, NULL, NULL, NULL, &origMask);
         if (errno != EINTR && res == -1) {
-            //some actions on receiving the signal
             printf("pselect");
             exit(1);
         }
