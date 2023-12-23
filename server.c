@@ -1,108 +1,216 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
 #include <netinet/in.h>
-#include <signal.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <stddef.h>
+#include <netdb.h>
+#include <stdio.h>
 #include <errno.h>
-#include <sys/select.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <signal.h>
 
-#define MAX_FD 10
+#define PORT "31337"
+#define MAX_PENDING 50
 
-volatile sig_atomic_t wasSigHup = 0;
+volatile sig_atomic_t was_stopped = 0;
 
-void sigHupHandler(int r) {
-    wasSigHup = 1;
+void signal_handler(int signal) {
+    was_stopped = 1;
 }
 
-int main() {
-    char buffer[256];
+void *get_in_addr(struct sockaddr *sa) {
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in*)sa)->sin_addr);
+    }
 
-    int socket_fd;
-    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd < 0) {
-        perror("ERROR opening socket");
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+int start_server() {
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    int rv;
+    struct addrinfo *ai, *p;
+    getaddrinfo(NULL, PORT, &hints, &ai);
+    if ((rv = getaddrinfo(NULL, PORT, &hints, &ai)) != 0) {
+        fprintf(stderr, "selectserver: %s\n", gai_strerror(rv));
         exit(1);
     }
-    printf("Server socket: %d\n", socket_fd);
 
-    struct sockaddr_in server_addr;
-    bzero(&server_addr, sizeof(struct sockaddr_in));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_addr.sin_port = htons(1234);
+    int sockfd = 0;
+    for (p = ai; p != NULL; p = p->ai_next) {
+        sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (sockfd < 0) {
+            continue;
+        }
 
-    bind(socket_fd, (struct sockaddr *) &server_addr, sizeof(struct sockaddr_in));
-    listen(socket_fd, MAX_FD);
-    printf("Server listen...\n");
+        int yes = 1;
+        setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 
+        if (bind(sockfd, p->ai_addr, p->ai_addrlen) < 0) {
+            close(sockfd);
+            continue;
+        }
+
+        break;
+    }
+
+    if (p == NULL) {
+        fprintf(stderr, "selectserver: failed to bind\n");
+        exit(2);
+    }
+
+    freeaddrinfo(ai);
+
+    if (listen(sockfd, MAX_PENDING) == -1) {
+        perror("listen");
+        exit(1);
+    }
+
+    return sockfd;
+}
+
+void register_handlers(sigset_t* sigmask) {
     struct sigaction sa;
     sigaction(SIGHUP, NULL, &sa);
-    sa.sa_handler = sigHupHandler;
+    sa.sa_handler = signal_handler;
     sa.sa_flags |= SA_RESTART;
     sigaction(SIGHUP, &sa, NULL);
 
-    sigset_t blockedMask, origMask;
+    sigaction(SIGTERM, NULL, &sa);
+    sa.sa_handler = signal_handler;
+    sa.sa_flags |= SA_RESTART;
+    sigaction(SIGTERM, &sa, NULL);
+
+    sigaction(SIGQUIT, NULL, &sa);
+    sa.sa_handler = signal_handler;
+    sa.sa_flags |= SA_RESTART;
+    sigaction(SIGQUIT, &sa, NULL);
+
+    sigset_t blockedMask;
     sigemptyset(&blockedMask);
     sigaddset(&blockedMask, SIGHUP);
-    sigprocmask(SIG_BLOCK, &blockedMask, &origMask);
+    sigaddset(&blockedMask, SIGTERM);
+    sigaddset(&blockedMask, SIGSTOP);
+    sigprocmask(SIG_BLOCK, &blockedMask, sigmask);
+}
 
-    int clients[MAX_FD];
-    memset(clients, 0, sizeof(int) * MAX_FD);
-    int cur_fd = 0;
-    int res;
+int find_client(int* clients, int active, int fd) {
+    for (int i = 0; i < active; i++) {
+        if (clients[i] == fd) {
+            return i;
+        }
+    }
+    return -1;
+}
 
-    while (1) {
-        fd_set work_fds;
-        FD_ZERO(&work_fds);
-        FD_SET(socket_fd, &work_fds);
+int main() {
+    int sockfd = start_server();
+    int maxfd = sockfd;
 
-        for (int clientIt = 0; clientIt < cur_fd; clientIt++)
-            FD_SET(clients[clientIt], &work_fds);
+    fd_set master;
+    fd_set temp_fd;
 
-        res = pselect(MAX_FD + 1, &work_fds, NULL, NULL, NULL, &origMask);
-        if (errno != EINTR && res == -1) {
-            //some actions on receiving the signal
-            printf("pselect");
+    FD_ZERO(&temp_fd);
+    FD_ZERO(&master);
+    FD_SET(sockfd, &master);
+
+    sigset_t sigmask;
+    register_handlers(&sigmask);
+
+    // NOTE: can be dynamicly allocated to prevent overflow
+    int clients[50];
+    int active = 0;
+
+    for (;;) {
+        if (was_stopped) {
+            puts("Stopping server...");
+            exit(0);
+        }
+
+        temp_fd = master;
+
+        maxfd = sockfd;
+        for (int i = 0; i < active; i++) {
+            if (clients[i] > maxfd) {
+                maxfd = clients[i];
+            }
+        }
+
+        printf("Active clients: %d, maxfd: %d\n", active, maxfd);
+        fflush(stdout);
+
+        if (pselect(maxfd+1, &temp_fd, NULL, NULL, NULL, &sigmask) == -1) {
+            if (errno == EINTR) {
+                puts("Stopping server...");
+                close(sockfd);
+                exit(0);
+            }
+            perror("select");
             exit(1);
         }
-        if (wasSigHup) {
-            printf("Signal received\n");
-            wasSigHup = 0;
-            break;
-        }
 
-        if (FD_ISSET(socket_fd, &work_fds)) {
-            int sock = accept(socket_fd, NULL, NULL);
-            if (sock < 0) {
-                perror("accept");
-                exit(3);
-            }
-            if (cur_fd + 1 > MAX_FD) {
+        for (int fd = 0; fd <= maxfd; fd++) {
+            if (!FD_ISSET(fd, &temp_fd)) {
                 continue;
-            } else {
-                clients[cur_fd] = sock;
-                cur_fd++;
-                printf("Add client. Client socket: %d\n", sock);
             }
 
-        }
-        for (int clientIt = 0; clientIt < cur_fd; clientIt++)
-            if (FD_ISSET(clients[clientIt], &work_fds)) {
-                bzero(buffer, 256);
-                int n = read(clients[clientIt], buffer, 255);
-                if (n <= 0 | n == 2) {
-                    close(clients[clientIt]);
-                    for (int i = clientIt + 1; i < cur_fd; i++)
-                        clients[i - 1] = clients[i];
-                    cur_fd--;
-                    printf("Client %d close connection\n", clients[clientIt]);
+            // handle new connection
+            if (fd == sockfd) {
+                struct sockaddr_storage remote_addr;
+                socklen_t addr_size = sizeof remote_addr;
+                int newfd = accept(sockfd, (struct sockaddr *)&remote_addr, &addr_size);
+                if (newfd == -1) {
+                    perror("accept");
                     continue;
                 }
-                printf("Client %d send %d bytes\n", clients[clientIt], n);
-            }
-    }
+                
+                FD_SET(newfd, &master);
+                clients[active] = newfd;
+                active += 1;
 
-    return 0;
-};
+                char remoteIP[INET6_ADDRSTRLEN];
+                printf("selectserver: new connection from %s on "
+                            "socket %d\n",
+                            inet_ntop(remote_addr.ss_family,
+                                get_in_addr((struct sockaddr*)&remote_addr),
+                                remoteIP, INET6_ADDRSTRLEN),
+                            newfd);
+                continue;
+            }
+
+            // handle data from a client
+            char buf[256];
+            int n = recv(fd, buf, sizeof buf - 1, 0);
+            if (n <= 0) {
+                if (n == 0) {
+                    printf("selectserver: socket %d hung up\n", fd);
+                } else {
+                    perror("recv");
+                }
+                close(fd);
+                FD_CLR(fd, &master);
+
+                int idx = find_client(clients, active, fd);
+                clients[idx] = clients[active - 1];
+                active -= 1;
+
+                continue;
+            }
+            buf[n] = '\0';
+
+            printf("got data from socket %d: %s", fd, buf);
+            if (buf[n-1] != '\n') {
+                puts("");
+            }
+        }
+    }
+}
